@@ -151,14 +151,18 @@ export function ZoneIntelligence() {
       </div>
 
       <div className="zi-lower">
-        <Panel title="Zone network" subtitle={`${zoneNodes.length} junctions`}>
+        <Panel
+          title="Zone network"
+          subtitle={`${zoneNodes.length} junctions`}
+          className="map-panel"
+        >
           <NetworkMap
             network={network.data}
             nodes={nodes.data}
             events={events.data?.items}
             focusZone={active.zone_id}
             onSelect={(id) => navigate(`/nodes/${id}`)}
-            height={330}
+            height="100%"
           />
         </Panel>
 

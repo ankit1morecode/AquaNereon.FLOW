@@ -15,6 +15,12 @@ import type {
   ZoneSummary,
 } from '../types';
 import { LocalDeviceBus, type DeviceBus } from './mqtt';
+import {
+  haversineMetres,
+  NODE_SEEDS,
+  SOURCE_SEEDS,
+  ZONE_SEEDS,
+} from './topology';
 import { NodeSimulator } from './nodeSimulator';
 
 /**
@@ -29,27 +35,13 @@ import { NodeSimulator } from './nodeSimulator';
  */
 
 /* ------------------------------------------------------------------ */
-/* Topology                                                            */
+/* Demand model                                                        */
 /* ------------------------------------------------------------------ */
 
 /**
- * Served population, sized to what the network can actually deliver.
- *
- * These are DN125-class diagnostic junctions carrying around 24 L/s each, so
- * nine of them serve a district rather than a city. Inventing a metropolis on
- * top of them would make every supply-versus-demand figure on the City screen
- * meaningless from the first frame.
- */
-const ZONES: Zone[] = [
-  { zone_id: 'Z-NORTH', name: 'Northgate', population: 41200, node_ids: [] },
-  { zone_id: 'Z-CENTRAL', name: 'Central Basin', population: 62400, node_ids: [] },
-  { zone_id: 'Z-SOUTH', name: 'Southbank', population: 45900, node_ids: [] },
-];
-
-/**
- * Average municipal draw per person: about 150 litres a day, which is a
- * typical European figure and the one that makes supply and demand comparable
- * at this network size.
+ * Average municipal draw per person: about 150 litres a day, a typical
+ * European figure and the one that makes supply and demand comparable at this
+ * network size.
  */
 const PER_CAPITA_LPS = 150 / 86400;
 
@@ -58,47 +50,21 @@ export function zoneDemandLps(population: number, hourOfDay: number): number {
   return population * PER_CAPITA_LPS * diurnalFactor(hourOfDay);
 }
 
-interface NodeSeed {
-  id: NodeId;
-  zone: string;
-  x: number;
-  y: number;
-  label: string;
-  nominal: number;
-  scenario: 'NORMAL' | 'DRIFT' | 'DISTURBANCE';
-  scale: number;
-  phase: number;
-  upstream: NodeId[];
-}
-
-/**
- * Laid out as a schematic, not a map. The dossier is explicit that the digital
- * twin is a computational graph rather than a geographic rendering (§12), and
- * a schematic makes upstream/downstream relationships readable in a way a set
- * of pins on a street map does not.
- */
-const NODE_SEEDS: NodeSeed[] = [
-  { id: 'AN-J-002', zone: 'Z-NORTH', x: 0.12, y: 0.18, label: 'Northgate inlet', nominal: 30, scenario: 'NORMAL', scale: 1.22, phase: 3, upstream: ['RES-1'] },
-  { id: 'AN-J-005', zone: 'Z-NORTH', x: 0.3, y: 0.3, label: 'Mill Road cross', nominal: 26, scenario: 'NORMAL', scale: 1.05, phase: 11, upstream: ['AN-J-002'] },
-  { id: 'AN-J-008', zone: 'Z-NORTH', x: 0.22, y: 0.52, label: 'Kingsway tie', nominal: 22, scenario: 'DRIFT', scale: 0.92, phase: 6, upstream: ['AN-J-005'] },
-  { id: 'AN-J-011', zone: 'Z-CENTRAL', x: 0.48, y: 0.2, label: 'Basin north feed', nominal: 28, scenario: 'NORMAL', scale: 1.14, phase: 17, upstream: ['RES-1', 'AN-J-005'] },
-  { id: 'AN-J-014', zone: 'Z-CENTRAL', x: 0.54, y: 0.46, label: 'Exchange junction', nominal: 26, scenario: 'DISTURBANCE', scale: 1.0, phase: 0, upstream: ['AN-J-011'] },
-  { id: 'AN-J-017', zone: 'Z-CENTRAL', x: 0.68, y: 0.62, label: 'Foundry branch', nominal: 21, scenario: 'NORMAL', scale: 0.88, phase: 23, upstream: ['AN-J-014'] },
-  { id: 'AN-J-021', zone: 'Z-SOUTH', x: 0.42, y: 0.76, label: 'Southbank tie', nominal: 24, scenario: 'NORMAL', scale: 0.98, phase: 9, upstream: ['AN-J-014', 'RES-2'] },
-  { id: 'AN-J-024', zone: 'Z-SOUTH', x: 0.66, y: 0.86, label: 'Dockside cross', nominal: 20, scenario: 'DRIFT', scale: 0.84, phase: 29, upstream: ['AN-J-021'] },
-  { id: 'AN-J-027', zone: 'Z-SOUTH', x: 0.85, y: 0.72, label: 'Harbour terminus', nominal: 18, scenario: 'NORMAL', scale: 0.76, phase: 14, upstream: ['AN-J-024', 'AN-J-017'] },
-];
-
-const SOURCES = [
-  { id: 'RES-1', zone: 'Z-NORTH', x: 0.04, y: 0.06, label: 'Highfield reservoir' },
-  { id: 'RES-2', zone: 'Z-SOUTH', x: 0.18, y: 0.92, label: 'Southbank pumping' },
-];
-
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
 const SEVERITY_ORDER: Severity[] = ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+/** Stable hash of a node id, for per-node random seeds. */
+function hashId(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 8;
+}
 
 function severityForState(state: FlowState): Severity {
   switch (state) {
@@ -160,7 +126,7 @@ export class PlatformSimulator {
     this.timeScale = options.timeScale ?? 6;
     this.tickHz = options.tickHz ?? 4;
 
-    this.zones = ZONES.map((z) => ({
+    this.zones = ZONE_SEEDS.map((z) => ({
       ...z,
       node_ids: NODE_SEEDS.filter((n) => n.zone === z.zone_id).map((n) => n.id),
     }));
@@ -171,7 +137,12 @@ export class PlatformSimulator {
         zone_id: seed.zone,
         hardware_version: 'AN-HW-2.1',
         firmware_version: '0.9.4',
-        location: { x: seed.x, y: seed.y, label: seed.label },
+        location: {
+          lat: seed.lat,
+          lng: seed.lng,
+          label: seed.label,
+          address: seed.address,
+        },
         nominal_flow_lps: seed.nominal,
         upstream: seed.upstream,
         downstream: NODE_SEEDS.filter((n) => n.upstream.includes(seed.id)).map((n) => n.id),
@@ -184,7 +155,9 @@ export class PlatformSimulator {
           scenario: seed.scenario,
           phase: seed.phase,
           flowScale: seed.scale,
-          seed: 0x1000 + seed.id.charCodeAt(seed.id.length - 1) * 977,
+          // Distinct per node, so faults and sensor noise do not correlate
+          // across the network purely because the ids look alike.
+          seed: 0x1000 + hashId(seed.id),
         }),
       );
     }
@@ -196,17 +169,17 @@ export class PlatformSimulator {
 
   private buildNetwork(): NetworkGraph {
     const vertices: NetworkGraph['vertices'] = [
-      ...SOURCES.map((s) => ({
+      ...SOURCE_SEEDS.map((s) => ({
         id: s.id,
-        kind: 'RESERVOIR' as const,
+        kind: s.kind,
         zone_id: s.zone,
-        location: { x: s.x, y: s.y, label: s.label },
+        location: { lat: s.lat, lng: s.lng, label: s.label, address: s.address },
       })),
       ...NODE_SEEDS.map((n) => ({
         id: n.id,
         kind: 'JUNCTION' as const,
         zone_id: n.zone,
-        location: { x: n.x, y: n.y, label: n.label },
+        location: { lat: n.lat, lng: n.lng, label: n.label, address: n.address },
       })),
     ];
 
@@ -215,14 +188,15 @@ export class PlatformSimulator {
       for (const up of seed.upstream) {
         const from = vertices.find((v) => v.id === up);
         if (!from) continue;
-        const dx = seed.x - from.location.x;
-        const dy = seed.y - from.location.y;
         edges.push({
           pipe_id: `P-${up}-${seed.id}`,
           from: up,
           to: seed.id,
-          diameter_mm: Math.round(seed.nominal * 7 + 60),
-          length_m: Math.round(Math.hypot(dx, dy) * 4200),
+          // Diameter follows duty, roughly as a real main would be sized.
+          diameter_mm: Math.round(seed.nominal * 5 + 90),
+          length_m: Math.round(
+            haversineMetres(from.location, { lat: seed.lat, lng: seed.lng, label: '' }),
+          ),
           nominal_flow_lps: seed.nominal,
           nominal_pressure_kpa: 310,
         });

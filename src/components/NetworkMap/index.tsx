@@ -1,27 +1,97 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import type { FlowState, NetworkGraph, NodeId, NodeSummary, WaterEvent } from '../../types';
+import { MAP_VIEW, zoneHull } from '../../services/topology';
 import { STATE_LABEL } from '../ui';
 
 /**
- * The hydraulic network, drawn as a schematic.
+ * The hydraulic network on a map.
  *
- * Deliberately not a street map. The dossier is explicit that the digital twin
- * is a computational graph rather than a geographic rendering (§12), and for
- * the question this view has to answer — did this disturbance come from
- * upstream, and what is downstream of it — a schematic beats pins on tiles.
- * Upstream/downstream reads as direction on the page, and no tile server is
- * involved.
+ * Geographic rather than schematic, because the questions asked of this view
+ * are ultimately about ground: which part of the city, what is upstream of it,
+ * and where do we send someone. Pipes are drawn between the junctions they
+ * connect, so the graph structure the digital twin reasons over (dossier §12)
+ * is visible on top of the streets it runs under.
  *
- * Pipes carry an animated flow direction whose speed follows the node's actual
- * throughput, so a starved branch visibly slows rather than needing a label.
+ * Driven imperatively rather than through React. Node states update several
+ * times a second and there are twenty-odd markers plus their pipes; restyling
+ * existing Leaflet layers is far cheaper than reconciling a component tree at
+ * that rate, and it keeps the map from flickering as data arrives.
+ *
+ * Scope note: the layout is illustrative. It is a plausible distribution
+ * network drawn over real ground, not a survey of anyone's actual water
+ * infrastructure, and the map says so.
  */
 
 const STATE_COLOR: Record<FlowState, string> = {
-  STABLE: 'var(--state-stable)',
-  DRIFT: 'var(--state-drift)',
-  PRE_DISTURBANCE: 'var(--state-pre)',
-  DISTURBANCE: 'var(--state-disturbance)',
+  STABLE: '#4fe0a0',
+  DRIFT: '#ffd166',
+  PRE_DISTURBANCE: '#ff9a4d',
+  DISTURBANCE: '#ff5f7a',
 };
+
+/**
+ * Basemap.
+ *
+ * Three sources, in order of preference:
+ *
+ *   1. VITE_TILE_URL — any provider you want, used verbatim.
+ *   2. VITE_CARTO_KEY — CARTO's raster basemaps, which look right for a dark
+ *      instrument UI without needing a filter.
+ *   3. Neither — plain OpenStreetMap tiles, darkened in CSS. Keyless, so the
+ *      map works for anyone who clones this with no setup at all.
+ *
+ * The key is read from the environment rather than written here because this
+ * repository is public. It is worth being clear that this does not make it
+ * secret: Vite inlines every VITE_* variable into the client bundle, so a
+ * browser map key is always readable by whoever loads the page. That is normal
+ * for this class of credential — the protection is a domain restriction in the
+ * provider's dashboard, not concealment.
+ *
+ * If the chosen provider starts failing — an expired key, a revoked domain,
+ * a network with the CDN blocked — the layer falls back to OSM rather than
+ * leaving a dark rectangle where the city should be.
+ */
+const CUSTOM_TILE_URL = import.meta.env.VITE_TILE_URL as string | undefined;
+const CARTO_KEY = import.meta.env.VITE_CARTO_KEY as string | undefined;
+const CARTO_STYLE = (import.meta.env.VITE_CARTO_STYLE as string | undefined) ?? 'dark_all';
+
+interface TileSource {
+  url: string;
+  attribution: string;
+  /** Light tiles that need inverting to sit under a dark interface. */
+  darken: boolean;
+}
+
+const OSM_SOURCE: TileSource = {
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution:
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  darken: true,
+};
+
+function primarySource(): TileSource {
+  if (CUSTOM_TILE_URL) {
+    return {
+      url: CUSTOM_TILE_URL,
+      attribution: (import.meta.env.VITE_TILE_ATTRIBUTION as string | undefined) ?? '',
+      darken: false,
+    };
+  }
+  if (CARTO_KEY) {
+    return {
+      url: `https://basemaps.cartocdn.com/rastertiles/${CARTO_STYLE}/{z}/{x}/{y}.png?key=${CARTO_KEY}`,
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      // CARTO's dark styles are already dark; inverting them would undo that.
+      darken: CARTO_STYLE.startsWith('voyager') || CARTO_STYLE.startsWith('positron'),
+    };
+  }
+  return OSM_SOURCE;
+}
+
+const PRIMARY_SOURCE = primarySource();
 
 export interface NetworkMapProps {
   network: NetworkGraph;
@@ -29,9 +99,19 @@ export interface NetworkMapProps {
   events?: WaterEvent[];
   selected?: NodeId | null;
   onSelect?: (nodeId: NodeId) => void;
-  /** Dim everything outside this zone. */
+  /** Dim everything outside this zone and fit the view to it. */
   focusZone?: string | null;
-  height?: number;
+  /**
+   * Pixels, or any CSS length. Pass "100%" to fill a panel that is itself
+   * sized by the grid — a map is a better use of spare height than a gap.
+   */
+  height?: number | string;
+}
+
+interface NodeLayers {
+  dot: L.CircleMarker;
+  halo: L.CircleMarker;
+  alert: L.CircleMarker;
 }
 
 export function NetworkMap({
@@ -43,181 +123,347 @@ export function NetworkMap({
   focusZone = null,
   height = 420,
 }: NetworkMapProps) {
-  const W = 1000;
-  const H = 680;
-  const [hovered, setHovered] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const nodeLayersRef = useRef(new Map<NodeId, NodeLayers>());
+  const pipeLayersRef = useRef(new Map<string, { casing: L.Polyline; flow: L.Polyline }>());
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  /** The view we want when nobody has panned or zoomed away from it. */
+  const fitBoundsRef = useRef<L.LatLngBounds | null>(null);
+  const userMovedRef = useRef(false);
+  const programmaticRef = useRef(false);
+
+  const [tilesFailed, setTilesFailed] = useState(false);
+  const [darken, setDarken] = useState(PRIMARY_SOURCE.darken);
 
   const byId = useMemo(() => new Map(nodes.map((n) => [n.node_id, n])), [nodes]);
   const openByNode = useMemo(() => {
-    const map = new Map<NodeId, WaterEvent[]>();
+    const map = new Map<NodeId, number>();
     for (const e of events) {
       if (e.status === 'CLOSED') continue;
-      const list = map.get(e.node_id) ?? [];
-      list.push(e);
-      map.set(e.node_id, list);
+      map.set(e.node_id, (map.get(e.node_id) ?? 0) + 1);
     }
     return map;
   }, [events]);
 
-  const px = (v: number) => 40 + v * (W - 80);
-  const py = (v: number) => 34 + v * (H - 80);
+  /* ---- build the map once ---- */
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || mapRef.current) return;
 
-  /** Soft zone hulls, so membership reads without boxing the diagram in. */
-  const zoneBlobs = useMemo(
-    () =>
-      network.zones.map((zone) => {
-        const members = network.vertices.filter((v) => v.zone_id === zone.zone_id);
-        if (members.length === 0) return null;
-        const xs = members.map((m) => px(m.location.x));
-        const ys = members.map((m) => py(m.location.y));
-        const pad = 52;
-        return {
-          zone,
-          x: Math.min(...xs) - pad,
-          y: Math.min(...ys) - pad,
-          w: Math.max(...xs) - Math.min(...xs) + pad * 2,
-          h: Math.max(...ys) - Math.min(...ys) + pad * 2,
-        };
-      }),
-    [network],
-  );
+    const map = L.map(container, {
+      center: MAP_VIEW.center,
+      zoom: MAP_VIEW.zoom,
+      minZoom: MAP_VIEW.minZoom,
+      maxZoom: MAP_VIEW.maxZoom,
+      zoomControl: true,
+      attributionControl: true,
+      // The map lives inside a scrolling page; grabbing the wheel as someone
+      // scrolls past it is the single most irritating thing an embedded map
+      // can do. Ctrl+wheel still zooms, and so do the buttons.
+      scrollWheelZoom: false,
+    });
+    mapRef.current = map;
+
+    let usingFallback = false;
+
+    const addTiles = (source: TileSource) => {
+      const layer = L.tileLayer(source.url, {
+        attribution: source.attribution,
+        maxZoom: MAP_VIEW.maxZoom,
+      });
+
+      let errors = 0;
+      layer.on('tileerror', () => {
+        errors += 1;
+        if (errors <= 3) return;
+        if (!usingFallback && source !== OSM_SOURCE) {
+          // The chosen provider is not answering. Swap to the keyless one
+          // rather than leaving the city blank.
+          usingFallback = true;
+          layer.remove();
+          setDarken(OSM_SOURCE.darken);
+          addTiles(OSM_SOURCE);
+          return;
+        }
+        // Even the fallback is unreachable. Vectors still draw, so this
+        // degrades to a dark plan rather than an empty panel — say which.
+        setTilesFailed(true);
+      });
+      layer.on('tileload', () => setTilesFailed(false));
+      layer.addTo(map);
+    };
+
+    addTiles(PRIMARY_SOURCE);
+
+    // Distinguish our own fitBounds from someone dragging the map, so a
+    // container resize does not yank the view back from wherever they went.
+    map.on('movestart', () => {
+      if (!programmaticRef.current) userMovedRef.current = true;
+    });
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      nodeLayersRef.current.clear();
+      pipeLayersRef.current.clear();
+    };
+  }, []);
+
+  /* ---- zones, pipes and markers ---- */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const layers: L.Layer[] = [];
+    const vertexById = new Map(network.vertices.map((v) => [v.id, v]));
+
+    // --- zone areas ---
+    for (const zone of network.zones) {
+      const members = network.vertices.filter((v) => v.zone_id === zone.zone_id);
+      const hull = zoneHull(members.map((m) => m.location));
+      if (hull.length < 3) continue;
+
+      const polygon = L.polygon(hull, {
+        className: 'nm-zone',
+        interactive: false,
+      }).addTo(map);
+      polygon.bindTooltip(zone.name, {
+        permanent: true,
+        direction: 'center',
+        className: 'nm-zone-label',
+      });
+      layers.push(polygon);
+    }
+
+    // --- pipes ---
+    for (const edge of network.edges) {
+      const from = vertexById.get(edge.from);
+      const to = vertexById.get(edge.to);
+      if (!from || !to) continue;
+
+      const path: [number, number][] = [
+        [from.location.lat, from.location.lng],
+        [to.location.lat, to.location.lng],
+      ];
+
+      const casing = L.polyline(path, {
+        className: 'nm-pipe',
+        weight: 2 + (edge.diameter_mm / 260) * 4,
+        interactive: false,
+      }).addTo(map);
+
+      const flow = L.polyline(path, {
+        className: 'nm-flow',
+        weight: 2,
+        interactive: false,
+      }).addTo(map);
+
+      flow.bindTooltip(
+        `${edge.pipe_id}<br>DN${edge.diameter_mm} · ${(edge.length_m / 1000).toFixed(2)} km`,
+        { className: 'nm-tip', sticky: true },
+      );
+
+      pipeLayersRef.current.set(edge.pipe_id, { casing, flow });
+      layers.push(casing, flow);
+    }
+
+    // --- sources ---
+    for (const vertex of network.vertices) {
+      if (vertex.kind === 'JUNCTION') continue;
+      const marker = L.marker([vertex.location.lat, vertex.location.lng], {
+        icon: L.divIcon({
+          className: 'nm-source-icon',
+          html: `<span class="nm-source-mark"></span><span class="nm-source-name">${vertex.location.label}</span>`,
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+        }),
+        interactive: false,
+        keyboard: false,
+      }).addTo(map);
+      layers.push(marker);
+    }
+
+    // --- junctions ---
+    for (const vertex of network.vertices) {
+      if (vertex.kind !== 'JUNCTION') continue;
+      const pos: [number, number] = [vertex.location.lat, vertex.location.lng];
+
+      // Drawn back to front: the alert pulse, then the selection halo, then
+      // the node itself, so the node is always the thing you click.
+      const alert = L.circleMarker(pos, {
+        radius: 13,
+        className: 'nm-alert',
+        interactive: false,
+      }).addTo(map);
+      alert.setStyle({ opacity: 0, fillOpacity: 0 });
+
+      const halo = L.circleMarker(pos, {
+        radius: 12,
+        className: 'nm-halo',
+        interactive: false,
+      }).addTo(map);
+      halo.setStyle({ opacity: 0, fillOpacity: 0 });
+
+      const dot = L.circleMarker(pos, {
+        radius: 7,
+        className: 'nm-dot',
+        weight: 2,
+      }).addTo(map);
+
+      dot.on('click', () => onSelectRef.current?.(vertex.id));
+      dot.bindTooltip(vertex.id.replace('AN-J-', 'J'), {
+        permanent: true,
+        direction: 'top',
+        offset: [0, -9],
+        className: 'nm-id',
+      });
+
+      nodeLayersRef.current.set(vertex.id, { dot, halo, alert });
+      layers.push(alert, halo, dot);
+    }
+
+    return () => {
+      for (const layer of layers) layer.remove();
+      nodeLayersRef.current.clear();
+      pipeLayersRef.current.clear();
+    };
+  }, [network]);
+
+  /* ---- live styling: state colour, alerts, selection, focus ---- */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    for (const [nodeId, { dot, halo, alert }] of nodeLayersRef.current) {
+      const summary = byId.get(nodeId);
+      const vertex = network.vertices.find((v) => v.id === nodeId);
+      const dimmed = focusZone !== null && vertex?.zone_id !== focusZone;
+      const colour = summary ? STATE_COLOR[summary.state] : '#56697a';
+      const offline = summary?.health === 'OFFLINE';
+
+      dot.setStyle({
+        color: offline ? '#ff5f7a' : colour,
+        fillColor: offline ? '#0a141d' : colour,
+        fillOpacity: dimmed ? 0.25 : 1,
+        opacity: dimmed ? 0.3 : 1,
+        dashArray: offline ? '3 3' : undefined,
+      });
+
+      const isSelected = selected === nodeId;
+      halo.setStyle({
+        color: '#d6e9f5',
+        opacity: isSelected && !dimmed ? 0.85 : 0,
+        fillOpacity: 0,
+      });
+
+      const alerts = openByNode.get(nodeId) ?? 0;
+      alert.setStyle({
+        color: colour,
+        opacity: alerts > 0 && !dimmed ? 0.6 : 0,
+        fillOpacity: 0,
+      });
+
+      // The pulse is a CSS animation on the rendered path; toggling the class
+      // is cheaper and smoother than animating the radius from JS.
+      const el = (alert as unknown as { _path?: SVGElement })._path;
+      if (el) el.classList.toggle('pulsing', alerts > 0 && !dimmed);
+
+      if (summary) {
+        dot.bindPopup(
+          `<strong>${vertex?.location.label ?? nodeId}</strong>` +
+            `<span class="nm-pop-id">${nodeId}</span>` +
+            `<span class="nm-pop-row">${STATE_LABEL[summary.state]} · ${summary.flow_lps.toFixed(1)} L/s</span>` +
+            `<span class="nm-pop-row">anomaly ${summary.anomaly_score.toFixed(2)} · ${summary.sampling_mode.toLowerCase()}</span>` +
+            (vertex?.location.address
+              ? `<span class="nm-pop-addr">${vertex.location.address}</span>`
+              : ''),
+          { className: 'nm-popup', closeButton: false },
+        );
+      }
+    }
+
+    // Pipe animation speed follows the throughput of the node it feeds, so a
+    // starved branch visibly slows instead of merely being labelled.
+    for (const edge of network.edges) {
+      const layer = pipeLayersRef.current.get(edge.pipe_id);
+      if (!layer) continue;
+      const downstream = byId.get(edge.to);
+      const load = downstream ? downstream.flow_lps / Math.max(edge.nominal_flow_lps, 1) : 0.6;
+      const period = Math.max(0.7, 4.5 - load * 3.2);
+
+      const toVertex = network.vertices.find((v) => v.id === edge.to);
+      const dimmed = focusZone !== null && toVertex?.zone_id !== focusZone;
+
+      const el = (layer.flow as unknown as { _path?: SVGElement })._path;
+      if (el) el.style.animationDuration = `${period}s`;
+      layer.flow.setStyle({ opacity: dimmed ? 0.12 : 0.75 });
+      layer.casing.setStyle({ opacity: dimmed ? 0.12 : 1 });
+    }
+  }, [byId, openByNode, selected, focusZone, network]);
+
+  /* ---- fit the view to the zone in focus ---- */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const members = network.vertices.filter(
+      (v) => focusZone === null || v.zone_id === focusZone,
+    );
+    if (members.length === 0) return;
+
+    const bounds = L.latLngBounds(members.map((m) => [m.location.lat, m.location.lng]));
+    fitBoundsRef.current = bounds;
+    userMovedRef.current = false;
+
+    // The container may not have had its final size when the map was created,
+    // and fitting against a zero-height box silently produces the wrong view.
+    map.invalidateSize({ animate: false });
+    programmaticRef.current = true;
+    map.fitBounds(bounds, {
+      padding: [48, 48],
+      maxZoom: focusZone ? 14 : 13,
+      animate: false,
+    });
+    programmaticRef.current = false;
+  }, [focusZone, network]);
+
+  /* ---- Leaflet needs telling when its container resizes ---- */
+  useEffect(() => {
+    const map = mapRef.current;
+    const container = containerRef.current;
+    if (!map || !container) return;
+
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize({ animate: false });
+      // Re-apply the intended view, unless the operator has moved away from it.
+      const bounds = fitBoundsRef.current;
+      if (!bounds || userMovedRef.current) return;
+      programmaticRef.current = true;
+      map.fitBounds(bounds, {
+        padding: [48, 48],
+        maxZoom: focusZone ? 14 : 13,
+        animate: false,
+      });
+      programmaticRef.current = false;
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [focusZone]);
 
   return (
     <div className="network-map" style={{ height }}>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
-        <defs>
-          <marker
-            id="nm-arrow"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="5"
-            markerHeight="5"
-            orient="auto-start-reverse"
-          >
-            <path d="M0,0 L10,5 L0,10 z" fill="rgba(140,190,215,0.5)" />
-          </marker>
-        </defs>
+      <div
+        ref={containerRef}
+        className={darken ? 'nm-canvas nm-darken-tiles' : 'nm-canvas'}
+      />
 
-        {/* zones */}
-        {zoneBlobs.map(
-          (blob) =>
-            blob && (
-              <g key={blob.zone.zone_id} opacity={focusZone && focusZone !== blob.zone.zone_id ? 0.25 : 1}>
-                <rect
-                  x={blob.x}
-                  y={blob.y}
-                  width={blob.w}
-                  height={blob.h}
-                  rx={26}
-                  className="nm-zone"
-                />
-                <text x={blob.x + 14} y={blob.y + 22} className="nm-zone-label">
-                  {blob.zone.name}
-                </text>
-              </g>
-            ),
-        )}
-
-        {/* pipes */}
-        {network.edges.map((edge) => {
-          const from = network.vertices.find((v) => v.id === edge.from);
-          const to = network.vertices.find((v) => v.id === edge.to);
-          if (!from || !to) return null;
-
-          const downstream = byId.get(edge.to);
-          const load = downstream ? downstream.flow_lps / Math.max(edge.nominal_flow_lps, 1) : 0.6;
-          const dim = focusZone && to.zone_id !== focusZone && from.zone_id !== focusZone;
-          // Dash animation period shortens as throughput rises, so a starved
-          // branch is visibly slow rather than merely labelled as one.
-          const period = Math.max(0.7, 4.5 - load * 3.2);
-
-          return (
-            <g key={edge.pipe_id} opacity={dim ? 0.22 : 1}>
-              <line
-                x1={px(from.location.x)}
-                y1={py(from.location.y)}
-                x2={px(to.location.x)}
-                y2={py(to.location.y)}
-                className="nm-pipe"
-                strokeWidth={2 + (edge.diameter_mm / 260) * 4}
-                markerEnd="url(#nm-arrow)"
-              />
-              <line
-                x1={px(from.location.x)}
-                y1={py(from.location.y)}
-                x2={px(to.location.x)}
-                y2={py(to.location.y)}
-                className="nm-flow"
-                strokeWidth={1.6}
-                style={{ animationDuration: `${period}s` }}
-              />
-            </g>
-          );
-        })}
-
-        {/* vertices */}
-        {network.vertices.map((vertex) => {
-          const summary = byId.get(vertex.id);
-          const dim = focusZone !== null && vertex.zone_id !== focusZone;
-          const open = openByNode.get(vertex.id);
-          const isSelected = selected === vertex.id;
-          const x = px(vertex.location.x);
-          const y = py(vertex.location.y);
-
-          if (vertex.kind !== 'JUNCTION') {
-            return (
-              <g key={vertex.id} opacity={dim ? 0.3 : 1} className="nm-source">
-                <rect x={x - 13} y={y - 13} width={26} height={26} rx={7} />
-                <text x={x} y={y + 30} textAnchor="middle" className="nm-label">
-                  {vertex.location.label}
-                </text>
-              </g>
-            );
-          }
-
-          const color = summary ? STATE_COLOR[summary.state] : 'var(--ink-faint)';
-          const offline = summary?.health === 'OFFLINE';
-
-          return (
-            <g
-              key={vertex.id}
-              className={`nm-node ${isSelected ? 'selected' : ''}`}
-              opacity={dim ? 0.3 : 1}
-              onClick={() => onSelect?.(vertex.id)}
-              onPointerEnter={() => setHovered(vertex.id)}
-              onPointerLeave={() => setHovered(null)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') onSelect?.(vertex.id);
-              }}
-            >
-              {open && open.length > 0 && (
-                <circle cx={x} cy={y} r={22} fill="none" stroke={color} className="nm-alert" />
-              )}
-              {isSelected && <circle cx={x} cy={y} r={17} className="nm-ring" />}
-              <circle cx={x} cy={y} r={10} fill={color} className="nm-dot" />
-              {offline && <circle cx={x} cy={y} r={10} className="nm-offline" />}
-              <text x={x} y={y - 18} textAnchor="middle" className="nm-id">
-                {vertex.id.replace('AN-J-', 'J')}
-              </text>
-              {(hovered === vertex.id || isSelected) && summary && (
-                <g className="nm-tip" transform={`translate(${x + 16}, ${y + 8})`}>
-                  <rect width={168} height={54} rx={7} />
-                  <text x={10} y={18}>{vertex.location.label}</text>
-                  <text x={10} y={34} className="nm-tip-sub">
-                    {STATE_LABEL[summary.state]} · {summary.flow_lps.toFixed(1)} L/s
-                  </text>
-                  <text x={10} y={47} className="nm-tip-sub">
-                    anomaly {summary.anomaly_score.toFixed(2)} · {summary.sampling_mode}
-                  </text>
-                </g>
-              )}
-            </g>
-          );
-        })}
-      </svg>
+      {tilesFailed && (
+        <div className="nm-tile-note">
+          Basemap unavailable — showing the network without it.
+        </div>
+      )}
 
       <ul className="nm-legend">
         {(['STABLE', 'DRIFT', 'PRE_DISTURBANCE', 'DISTURBANCE'] as FlowState[]).map((s) => (
@@ -227,6 +473,8 @@ export function NetworkMap({
           </li>
         ))}
       </ul>
+
+      <p className="nm-disclaimer">Illustrative network layout, not survey data.</p>
     </div>
   );
 }

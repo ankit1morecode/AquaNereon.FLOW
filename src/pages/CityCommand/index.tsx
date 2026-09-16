@@ -129,15 +129,15 @@ export function CityCommand() {
       <div className="cc-main">
         <Panel
           title="Network"
-          subtitle="Hydraulic graph · upstream to downstream, left to right"
-          className="cc-map"
+          subtitle="Junctions, pipes and zones · click a node to open it"
+          className="cc-map map-panel"
         >
           <NetworkMap
             network={network.data}
             nodes={nodes.data}
             events={events.data?.items}
             onSelect={(id) => navigate(`/nodes/${id}`)}
-            height={470}
+            height="100%"
           />
         </Panel>
 

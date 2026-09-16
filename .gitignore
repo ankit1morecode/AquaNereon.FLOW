@@ -19,3 +19,9 @@ Thumbs.db
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Local environment files, including API keys
+.env
+.env.local
+.env.*.local
+!.env.example

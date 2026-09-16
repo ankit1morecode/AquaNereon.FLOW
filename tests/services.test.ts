@@ -130,18 +130,20 @@ describe('demand model', () => {
     expect(diurnalFactor(-1)).toBeCloseTo(diurnalFactor(23), 10);
   });
 
-  it('is sized so a district demand is comparable to what the nodes deliver', () => {
-    // Nine junctions at roughly 24 L/s carry about 210 L/s. Mean demand for
-    // the served population has to land near that or every supply-versus-
-    // demand figure is meaningless.
-    const population = 41200 + 62400 + 45900;
-    const mean =
+  it('is sized so demand is comparable to what the network delivers', () => {
+    // Checked against the running network rather than a hard-coded figure, so
+    // adding nodes or zones cannot silently put the two on different scales.
+    const platform = new PlatformSimulator();
+    run(platform, 60);
+    const supply = [...platform.nodes.values()].reduce((s, n) => s + n.outletFlowLps, 0);
+    const population = platform.zones.reduce((s, z) => s + z.population, 0);
+    const meanDemand =
       Array.from({ length: 24 }, (_, h) => zoneDemandLps(population, h)).reduce(
         (s, v) => s + v,
         0,
       ) / 24;
-    expect(mean).toBeGreaterThan(140);
-    expect(mean).toBeLessThan(280);
+    expect(meanDemand / supply).toBeGreaterThan(0.6);
+    expect(meanDemand / supply).toBeLessThan(1.6);
   });
 });
 
@@ -149,8 +151,8 @@ describe('platform simulator', () => {
   it('builds a connected network with sources and junctions', () => {
     const platform = new PlatformSimulator();
     const { vertices, edges } = platform.network;
-    expect(vertices.filter((v) => v.kind === 'JUNCTION').length).toBe(9);
-    expect(vertices.filter((v) => v.kind === 'RESERVOIR').length).toBe(2);
+    expect(vertices.filter((v) => v.kind === 'JUNCTION').length).toBe(21);
+    expect(vertices.filter((v) => v.kind !== 'JUNCTION').length).toBe(3);
     // Every edge connects two vertices that exist.
     for (const edge of edges) {
       expect(vertices.some((v) => v.id === edge.from)).toBe(true);
@@ -317,7 +319,7 @@ describe('simulated client', () => {
     const { platform, client } = build();
     run(platform, 30);
     const nodes = await client.getNodes();
-    expect(nodes).toHaveLength(9);
+    expect(nodes).toHaveLength(21);
     for (const node of nodes) {
       expect(node.node_id).toMatch(/^AN-J-/);
       expect(node.flow_lps).toBeGreaterThan(0);

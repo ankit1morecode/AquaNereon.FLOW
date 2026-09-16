@@ -23,6 +23,8 @@ the production ingestion and query contracts (§16, §30.2).
 VITE_API_BASE_URL=https://backend/api/v1 npm run dev
 ```
 
+Copy `.env.example` to `.env.local` for basemap keys and the backend URL.
+
 ---
 
 ## The one idea holding it together
@@ -81,7 +83,7 @@ The seven from §27, plus the primitives they share.
 
 | Component | Notes |
 | --- | --- |
-| `NetworkMap` | Schematic, not a street map. The twin is a computational graph (§12), and upstream/downstream reads as direction on the page. Pipe flow animates at a rate set by actual throughput, so a starved branch visibly slows |
+| `NetworkMap` | Leaflet, with the hydraulic graph drawn over real ground. Pipe flow animates at a rate set by actual throughput, so a starved branch visibly slows |
 | `NodeStatus` | State, health, recent deviation, and whether the software has already raised its own sampling |
 | `FlowSignatureChart` | Baseline distance against the thresholds it is classified on, so the badge is checkable rather than declarative |
 | `CircumferentialProfile` | The 16 channels against baseline — the fingerprint, shown raw rather than reduced to a score (§2) |
@@ -96,6 +98,54 @@ instrument styling without a page of theme overrides. What the screens need is
 four shapes — a line, a band, a bar row, a sparkline — so they are drawn
 directly. That is the point to bring a real charting library in behind the same
 component surface if brushing, zooming and export are ever needed.
+
+---
+
+## The network
+
+Twenty-one diagnostic junctions across five zones, fed from three sources, on
+a Leaflet map (dossier §18). Pipes are drawn between the junctions they
+connect, so the graph the digital twin reasons over is visible on top of the
+streets it runs under, and upstream/downstream means something you can point
+at.
+
+| Zone | Junctions | Served |
+| --- | --- | --- |
+| Northgate | 4 | 62,000 |
+| Millfield | 4 | 51,000 |
+| Central Basin | 5 | 93,000 |
+| Dockside | 4 | 58,000 |
+| Southbank | 4 | 67,400 |
+
+The map is driven imperatively rather than through React components. Node
+states update several times a second across twenty-odd markers and their
+pipes; restyling existing Leaflet layers is far cheaper than reconciling a
+component tree at that rate, and it stops the map flickering as data arrives.
+
+> **The layout is illustrative.** It is a plausible distribution network drawn
+> over real ground, not a survey of anyone's actual water infrastructure. The
+> map says so on its face, and it should keep saying so.
+
+### Basemap
+
+Three sources, in order of preference:
+
+1. `VITE_TILE_URL` — any provider, used verbatim.
+2. `VITE_CARTO_KEY` — CARTO raster basemaps, which suit a dark instrument UI.
+3. Neither — plain OpenStreetMap tiles, darkened in CSS. Keyless, so a fresh
+   clone shows a working map with no setup at all.
+
+If the chosen provider starts failing — expired key, revoked domain, blocked
+CDN — the layer falls back to OSM rather than leaving a dark rectangle where
+the city should be. If even that is unreachable the vectors still draw, and
+the map says the basemap is missing instead of looking broken.
+
+Copy `.env.example` to `.env.local` to configure it. **A browser map key is not
+a secret:** Vite inlines every `VITE_*` variable into the client bundle, so
+whoever loads the page can read it. That is normal for this class of
+credential — the protection is a domain restriction in the provider's
+dashboard, not concealment. `.env.local` is gitignored so the key stays out of
+the repository, which is a different concern and also worth doing.
 
 ---
 
@@ -246,7 +296,7 @@ src/
 ├── app/AppShell.tsx       navigation and the always-visible status
 ├── pages/                 CityCommand, ZoneIntelligence, NodeDiagnostics, Events, Reports
 ├── components/            the seven from §27, plus charts/ and ui/ primitives
-├── services/              API clients, platform simulator, MQTT contract
+├── services/              API clients, platform simulator, MQTT contract, topology
 ├── types/api.ts           wire types, snake_case, matching §23
 ├── styles/                tokens, app, viz
 └── viz/                   the 3D module — core/ has no Three.js import anywhere

@@ -38,11 +38,19 @@ export interface DataQuality {
 /* Nodes (GET /api/v1/nodes, /nodes/{id})                              */
 /* ================================================================== */
 
+/**
+ * Where an asset physically sits.
+ *
+ * Geographic, because the network view is a real map: an operator dispatching
+ * an inspection needs somewhere to send them, and upstream/downstream only
+ * means anything against the ground the pipes are actually in.
+ */
 export interface NodeLocation {
-  /** Schematic layout coordinates for the network view, 0..1 in both axes. */
-  x: number;
-  y: number;
+  lat: number;
+  lng: number;
   label: string;
+  /** Street or landmark, for the dispatch line on an event. */
+  address?: string;
 }
 
 export interface AquaNereonNode {
