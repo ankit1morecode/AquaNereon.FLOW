@@ -77,6 +77,7 @@ function SimulationDriver({ engine, externalSource, onRecordingComplete }: Scene
   const publish = useVizStore((s) => s.publish);
   const clearSeek = useVizStore((s) => s.clearSeek);
   const setRecording = useVizStore((s) => s.setRecording);
+  const setMode = useVizStore((s) => s.setMode);
 
   const manualSource = useMemo(() => new ManualFlowSource(), []);
   const recorder = useMemo(() => new FlowRecorder(10, 600), []);
@@ -86,12 +87,23 @@ function SimulationDriver({ engine, externalSource, onRecordingComplete }: Scene
   useEffect(() => {
     if (externalSource) {
       engine.setSource(externalSource);
-    } else if (mode === 'MANUAL') {
-      engine.setSource(manualSource, false);
-    } else if (mode !== 'EXTERNAL') {
-      engine.setSource(new SyntheticFlowSource(findScenario(mode)));
+      return;
     }
-  }, [engine, externalSource, manualSource, mode]);
+    if (mode === 'MANUAL') {
+      engine.setSource(manualSource, false);
+      return;
+    }
+    // EXTERNAL with no source to back it is stale state, not a mode. The store
+    // is module-level, so a host that mounted this with a live feed leaves the
+    // flag set; a later standalone mount would otherwise sit on a dead source
+    // and render an empty pipe with no explanation.
+    if (mode === 'EXTERNAL') {
+      setMode('NORMAL');
+      engine.setSource(new SyntheticFlowSource(findScenario('NORMAL')));
+      return;
+    }
+    engine.setSource(new SyntheticFlowSource(findScenario(mode)));
+  }, [engine, externalSource, manualSource, mode, setMode]);
 
   useEffect(() => {
     manualSource.flowA = manual.flowA;

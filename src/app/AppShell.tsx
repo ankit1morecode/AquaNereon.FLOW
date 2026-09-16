@@ -1,4 +1,5 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useCallback, useEffect } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useApi, useQuery } from '../services/ApiProvider';
 import { STATE_CLASS, STATE_LABEL, clockTime } from '../components/ui';
 
@@ -24,7 +25,29 @@ const NAV = [
 export function AppShell() {
   const client = useApi();
   const location = useLocation();
+  const navigate = useNavigate();
   const overview = useQuery((c) => c.getCityOverview(), []);
+
+  const isBare = location.pathname.startsWith('/viz');
+
+  const leaveBare = useCallback(() => {
+    // Go back if there is somewhere to go back to; otherwise this was opened
+    // directly and City Command is the sensible home.
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+    if (idx > 0) navigate(-1);
+    else navigate('/');
+  }, [navigate]);
+
+  // Escape leaves the full-screen view. Bound here rather than inside the 3D
+  // module, which is reusable and has no business knowing about app routing.
+  useEffect(() => {
+    if (!isBare) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') leaveBare();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isBare, leaveBare]);
 
   const o = overview.data;
   const worst = o
@@ -37,10 +60,30 @@ export function AppShell() {
           : 'STABLE'
     : 'STABLE';
 
-  // The full-screen 3D view gets the whole viewport; a nav bar over it would
-  // just be in the way of the thing it is there to show.
-  const bare = location.pathname.startsWith('/viz');
-  if (bare) return <Outlet />;
+  // The full-screen 3D view gets the whole viewport; a nav bar across the top
+  // would sit in front of the thing it is there to show. It still needs a way
+  // out, though — a view with no exit is a trap, and someone who opened it
+  // from a node has nothing to click.
+  //
+  // So: one floating control, and the module's own header is hidden here
+  // because it repeats a brand the application already shows.
+  if (isBare) {
+    return (
+      <div className="shell-bare">
+        <Outlet />
+        <button
+          type="button"
+          className="bare-back"
+          onClick={leaveBare}
+          title="Return to the platform (Esc)"
+        >
+          <span aria-hidden="true">←</span>
+          AquaNereon<i>.FLOW</i>
+          <em>platform</em>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="shell">

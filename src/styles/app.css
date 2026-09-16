@@ -2022,3 +2022,244 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+/* ================================================================
+   Layout stability
+   ================================================================
+   Nothing on these screens may change size because its *state* changed.
+   A badge that grows from "Stable" to "Pre-disturbance", a scrollbar that
+   appears when one more event arrives, a number that gains a digit — each
+   nudges everything around it, and an operator reading a value mid-glance
+   loses their place. These rules reserve the space up front. */
+
+/* Digits all the same width, so a value changing never re-flows its row. */
+body {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keep the gutter whether or not the content currently overflows: without
+   this, one more event in a list shifts the entire page sideways. */
+.shell-main,
+.panel-body-scroll,
+.viz-left {
+  scrollbar-gutter: stable;
+}
+
+/* Panels in a sized grid row should fill it rather than shrink to content,
+   so a list emptying does not collapse the panel around it. */
+.panel-body {
+  flex: 1 1 auto;
+}
+
+.cc-attention .panel-body,
+.cc-events .panel-body,
+.zi-nodes .panel-body,
+.zi-events .panel-body {
+  max-height: none;
+}
+
+/* --- state badge: same width for all four labels --- */
+
+.state-badge {
+  justify-content: center;
+}
+
+.sb-labels {
+  display: grid;
+}
+
+.sb-labels > span {
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.sb-labels > span.on {
+  visibility: visible;
+}
+
+/* --- reserved slots for content that comes and goes --- */
+
+.metric-value .trend {
+  min-width: 9px;
+  display: inline-block;
+  text-align: center;
+}
+
+.trend.flat {
+  visibility: hidden;
+}
+
+/* Longest sampling mode is "high-resolution". */
+.nd-sampling {
+  display: inline-block;
+  min-width: 118px;
+  text-align: center;
+}
+
+/* Longest health status is "DEGRADED". */
+.nd-health {
+  min-width: 96px;
+}
+
+.nd-status {
+  justify-content: flex-end;
+}
+
+/* The node selector must not resize with the name of the node in it. */
+.nd-ident select {
+  width: 252px;
+}
+
+/* "just now" and "12m ago" are different widths; the column is not. */
+.event-meta {
+  min-width: 68px;
+}
+
+.ns-foot .ns-seen {
+  min-width: 62px;
+  text-align: right;
+}
+
+.ns-figures span {
+  min-width: 74px;
+}
+
+/* Present only while a command is in flight, but the space is always there. */
+.cmd-pending {
+  min-height: 16px;
+}
+
+.cmd-pending:empty {
+  visibility: hidden;
+}
+
+/* The supply-crossing warning appears and clears with the forecast. */
+.forecast-foot {
+  min-height: 15px;
+}
+
+/* Legend readouts appear on hover; reserve the width so the legend is still. */
+.chart-legend b {
+  min-width: 46px;
+  display: inline-block;
+}
+
+/* Open-event count appears only when there is one. */
+.shell-events {
+  min-width: 52px;
+  text-align: right;
+}
+
+.shell-state {
+  min-width: 132px;
+}
+
+.shell-clock {
+  min-width: 38px;
+  text-align: right;
+}
+
+/* "recirculating" appears once the core breaks down. */
+.nd-state-facts dd em {
+  display: inline-block;
+  min-width: 74px;
+  text-align: right;
+}
+
+/* "now" marks whichever state is current. */
+.state-ladder li b {
+  min-width: 26px;
+  text-align: right;
+}
+
+.circ-stats dd,
+.nd-state-facts dd,
+.nd-health-grid dd {
+  min-width: 56px;
+  text-align: right;
+}
+
+.kpi-loss b {
+  min-width: 34px;
+  text-align: right;
+}
+
+.sr-cell b {
+  min-height: 20px;
+}
+
+/* ================================================================
+   Full-screen 3D route
+   ================================================================ */
+
+.shell-bare {
+  position: relative;
+  height: 100%;
+}
+
+/* The module's own header repeats a brand the application already owns, and
+   the control below sits where it would. */
+.shell-bare .viz-header {
+  display: none;
+}
+
+.bare-back {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  z-index: 25;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 14px 8px 11px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--panel-edge);
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: border-color 140ms, background 140ms;
+}
+
+.bare-back:hover {
+  border-color: var(--panel-edge-strong);
+  background: rgba(16, 32, 44, 0.86);
+}
+
+.bare-back span {
+  color: var(--a);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.bare-back i {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--a);
+  margin-left: -7px;
+}
+
+.bare-back em {
+  font-style: normal;
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* When the side column stops sharing a row with the map it is no longer
+   constrained by it, so the lists need their own ceiling again — otherwise a
+   busy network grows the panel and pushes the page around beneath it. */
+@media (max-width: 1240px) {
+  .cc-attention .panel-body,
+  .cc-events .panel-body,
+  .zi-nodes .panel-body,
+  .zi-events .panel-body {
+    max-height: 240px;
+  }
+}

@@ -62,6 +62,25 @@ export const STATE_CLASS: Record<FlowState, string> = {
   DISTURBANCE: 'st-disturbance',
 };
 
+export const ALL_STATES: FlowState[] = [
+  'STABLE',
+  'DRIFT',
+  'PRE_DISTURBANCE',
+  'DISTURBANCE',
+];
+
+/**
+ * State badge with a width that does not depend on which state it is showing.
+ *
+ * "Stable" and "Pre-disturbance" are very different lengths, and this badge
+ * sits in headers and list rows all over the platform. Letting it resize means
+ * every escalation nudges the layout around it, which is both distracting and
+ * a good way to make someone misread a number they were mid-way through.
+ *
+ * All four labels are stacked in one grid cell and only the active one is
+ * visible, so the element is always as wide as the longest — exactly, without
+ * a hand-measured min-width that breaks when the font falls back.
+ */
 export function StateBadge({
   state,
   size = 'md',
@@ -79,7 +98,13 @@ export function StateBadge({
       }`}
     >
       <i />
-      {STATE_LABEL[state]}
+      <span className="sb-labels">
+        {ALL_STATES.map((s) => (
+          <span key={s} className={s === state ? 'on' : ''} aria-hidden={s !== state}>
+            {STATE_LABEL[s]}
+          </span>
+        ))}
+      </span>
     </span>
   );
 }
@@ -127,15 +152,19 @@ export function Metric({
   tone?: 'ok' | 'warn' | 'hot';
   trend?: number;
 }) {
+  const rising = trend !== undefined && trend > 1e-6;
+  const falling = trend !== undefined && trend < -1e-6;
   return (
     <div className="metric" title={hint}>
       <span className="metric-label">{label}</span>
       <span className={`metric-value ${tone ? `mv-${tone}` : ''}`}>
         {value}
         {unit && <em>{unit}</em>}
-        {trend !== undefined && Math.abs(trend) > 1e-6 && (
-          <i className={trend > 0 ? 'trend up' : 'trend down'}>{trend > 0 ? '▲' : '▼'}</i>
-        )}
+        {/* Always rendered, so the value does not shift sideways the moment a
+            trend appears or clears. */}
+        <i className={`trend ${rising ? 'up' : falling ? 'down' : 'flat'}`}>
+          {rising ? '▲' : falling ? '▼' : ''}
+        </i>
       </span>
     </div>
   );

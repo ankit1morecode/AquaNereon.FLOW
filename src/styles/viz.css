@@ -954,3 +954,51 @@ body,
   font-size: 12px;
   z-index: 30;
 }
+
+/* ------------------------------------------- state-independent widths */
+
+/* The badge must not resize when the state it reports changes: it sits at the
+   top of the panel and everything below would shift with it. */
+.badge {
+  justify-content: center;
+}
+
+.badge-labels {
+  display: grid;
+}
+
+.badge-labels > span {
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.badge-labels > span.on {
+  visibility: visible;
+}
+
+/* Digits keep a constant width, so a reading gaining a decimal place does not
+   nudge its neighbours. */
+.viz-root {
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-value,
+.distance-label,
+.flows strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.flows .flow {
+  min-width: 74px;
+}
+
+.flow-out {
+  min-width: 96px;
+}
+
+/* "0.8 /24s" and "13.9 /24s" are different widths; the transport is not. */
+.clock {
+  min-width: 66px;
+  text-align: right;
+}

@@ -11,6 +11,8 @@ import { useVizStore } from '../store';
  * baseline, which is why the badge says what it says.
  */
 
+const ALL_STATES: FlowState[] = ['STABLE', 'DRIFT', 'PRE_DISTURBANCE', 'DISTURBANCE'];
+
 const STATE_LABEL: Record<FlowState, string> = {
   STABLE: 'Stable',
   DRIFT: 'Drift',
@@ -46,9 +48,18 @@ export function StatePanel() {
 
   return (
     <div className="state-panel">
+      {/* All four labels occupy one grid cell so the badge is always as wide
+          as the longest. A badge that grows from "Stable" to "Pre-disturbance"
+          shoves the panel around it every time the flow escalates. */}
       <div className={`badge state-${r.state.toLowerCase()}`}>
         <span className="badge-dot" />
-        {STATE_LABEL[r.state]}
+        <span className="badge-labels">
+          {ALL_STATES.map((s) => (
+            <span key={s} className={s === r.state ? 'on' : ''} aria-hidden={s !== r.state}>
+              {STATE_LABEL[s]}
+            </span>
+          ))}
+        </span>
       </div>
 
       <div className="distance">
