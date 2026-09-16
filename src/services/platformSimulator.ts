@@ -3,7 +3,6 @@ import type {
   AquaNereonNode,
   CityOverview,
   DemandForecast,
-  EvidenceItem,
   FlowState,
   NetworkGraph,
   NodeId,
@@ -14,6 +13,8 @@ import type {
   Zone,
   ZoneSummary,
 } from '../types';
+import { assess, SEVERITY_ORDER } from './assessment';
+import { suspectRegion } from './propagation';
 import { LocalDeviceBus, type DeviceBus } from './mqtt';
 import {
   haversineMetres,
@@ -54,8 +55,6 @@ export function zoneDemandLps(population: number, hourOfDay: number): number {
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-const SEVERITY_ORDER: Severity[] = ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-
 /** Stable hash of a node id, for per-node random seeds. */
 function hashId(id: string): number {
   let h = 2166136261;
@@ -64,19 +63,6 @@ function hashId(id: string): number {
     h = Math.imul(h, 16777619);
   }
   return h >>> 8;
-}
-
-function severityForState(state: FlowState): Severity {
-  switch (state) {
-    case 'STABLE':
-      return 'INFO';
-    case 'DRIFT':
-      return 'LOW';
-    case 'PRE_DISTURBANCE':
-      return 'MEDIUM';
-    case 'DISTURBANCE':
-      return 'HIGH';
-  }
 }
 
 /** Diurnal municipal demand: twin morning and evening peaks, night trough. */
@@ -341,153 +327,49 @@ export class PlatformSimulator {
   private formEvent(sim: NodeSimulator, from: FlowState): WaterEvent {
     const sig = sim.signature;
     const neighbours = this.neighbourStates(sim.node.node_id);
-    const propagated = neighbours.upstream.some((n) => n.state !== 'STABLE');
 
-    const evidence: EvidenceItem[] = [
-      {
-        kind: 'SIGNATURE_DEVIATION',
-        label: 'Baseline distance',
-        value: sig.baseline_distance.toFixed(3),
-        weight: Math.min(1, sig.baseline_distance / 0.25),
-        detail: `L2 distance of the 16-channel distribution from baseline ${sig.baseline_id}.`,
-      },
-      {
-        kind: 'SENSOR',
-        label: 'Circumferential asymmetry',
-        value: sig.circumferential.asymmetry.toFixed(3),
-        weight: Math.min(1, sig.circumferential.asymmetry / 0.12),
-        detail: 'Resultant of the 16 channel vectors; zero for an even ring.',
-      },
-      {
-        kind: 'SENSOR',
-        label: 'Sector imbalance',
-        value: sig.circumferential.sector_imbalance.toFixed(2),
-        weight: Math.min(1, sig.circumferential.sector_imbalance / 1.2),
-        detail: '(max - min) / mean across the ring.',
-      },
-      {
-        kind: 'RATE_OF_CHANGE',
-        label: 'Rate of change',
-        value: `${(sig.temporal.rate_of_change * 1000).toFixed(1)} /ks`,
-        weight: Math.min(1, Math.abs(sig.temporal.rate_of_change) * 40),
-        detail: 'Change in baseline distance per second.',
-      },
-      {
-        kind: 'PERSISTENCE',
-        label: 'Persistence',
-        value: `${Math.round(sig.temporal.persistence * 100)}%`,
-        weight: sig.temporal.persistence,
-        detail: 'Fraction of the recent window at or above DRIFT.',
-      },
-      {
-        kind: 'SENSOR',
-        label: 'Core deficit',
-        value: sig.hydraulic.axial_deficit.toFixed(2),
-        weight: Math.min(1, sig.hydraulic.axial_deficit / 1.4),
-        detail: 'Above 1.0 the vortex core recirculates.',
-      },
-      {
-        kind: 'NEIGHBOUR',
-        label: 'Upstream behaviour',
-        value: propagated ? 'Disturbed' : 'Stable',
-        weight: propagated ? 0.8 : 0.15,
-        detail: neighbours.upstream.map((n) => `${n.node_id}: ${n.state}`).join(', ') || 'No upstream nodes.',
-      },
-      {
-        kind: 'DATA_QUALITY',
-        label: 'Data quality',
-        value: `${Math.round(sig.data_quality.confidence * 100)}%`,
-        weight: 1 - sig.data_quality.confidence,
-        detail: sig.data_quality.stale ? 'Feed is stale.' : 'Feed complete.',
-      },
-    ];
+    // One definition of the evidence, shared with the live assessment shown on
+    // Node Diagnostics. Two copies would drift, and the screen would end up
+    // explaining a conclusion the event engine did not reach.
+    const assessment = assess({
+      signature: sig,
+      state: sim.state,
+      upstream: neighbours.upstream,
+      downstream: neighbours.downstream,
+    });
 
-    const severity = severityForState(sim.state);
-    const leakish =
-      sim.state !== 'DRIFT' &&
-      sig.circumferential.asymmetry > 0.05 &&
-      sig.temporal.persistence > 0.5 &&
-      !propagated;
-
-    const eventType = leakish
-      ? 'LEAKAGE_SUSPECTED'
-      : propagated
-        ? 'NETWORK_EVENT'
-        : 'FLOW_ANOMALY';
+    const region = suspectRegion(this.network, sim.node.node_id);
 
     return {
       event_id: `EV-${sim.node.node_id}-${Math.round(this.time)}`,
-      event_type: eventType,
+      event_type: assessment.eventType,
       node_id: sim.node.node_id,
       zone_id: sim.node.zone_id,
       timestamp: this.nowIso(),
-      severity,
+      severity: assessment.severity,
       anomaly_score: sim.anomalyScore,
       state_transition: { from, to: sim.state },
-      evidence,
-      model_outputs: [
-        {
-          model_id: 'AI-01',
-          model_version: '0.3.1',
-          prediction: sim.state,
-          score: sim.anomalyScore,
-          confidence: sig.confidence,
-          contributing_features: [
-            'circumferential.asymmetry',
-            'circumferential.modes[0]',
-            'temporal.persistence',
-            'hydraulic.axial_deficit',
-          ],
-          explanation: [
-            'Circumferential distribution departed from the stored baseline.',
-            'Deviation persisted across consecutive windows rather than spiking.',
-            propagated
-              ? 'Upstream nodes show correlated behaviour.'
-              : 'No correlated upstream behaviour; deviation appears local.',
-          ],
-        },
-        ...(leakish
-          ? [
-              {
-                model_id: 'AI-03',
-                model_version: '0.2.0',
-                prediction: 'Suspected loss between this node and the next downstream',
-                score: 0.62 + sig.circumferential.asymmetry,
-                confidence: 0.54,
-                contributing_features: [
-                  'flow imbalance',
-                  'pressure deviation',
-                  'circumferential asymmetry',
-                  'acoustic RMS',
-                ],
-                explanation: [
-                  'Persistent one-sided circumferential pattern with no upstream correlate.',
-                  'Evidence is indicative, not conclusive: no metered consumption mismatch yet.',
-                ],
-              },
-            ]
-          : []),
-      ],
+      evidence: assessment.evidence,
+      model_outputs: assessment.modelOutputs,
       network_context: {
         upstream_states: neighbours.upstream,
         downstream_states: neighbours.downstream,
-        propagation: propagated ? 'PROPAGATED' : 'LOCAL',
+        propagation: assessment.propagated ? 'PROPAGATED' : 'LOCAL',
       },
       data_quality: sig.data_quality,
-      suspected_origin: leakish
-        ? {
-            description: `Between ${sim.node.node_id} and ${sim.node.downstream[0] ?? 'the zone terminus'}`,
-            confidence: 0.54,
-          }
+      suspected_origin: assessment.leakSuspected
+        ? { description: region.description, confidence: 0.54 }
         : undefined,
       recommended_action: {
         action:
           sim.state === 'DISTURBANCE'
-            ? `Dispatch inspection to ${sim.node.location.label}; hold high-resolution sampling.`
+            ? `Dispatch inspection to ${sim.node.location.label}${
+                sim.node.location.address ? ` (${sim.node.location.address})` : ''
+              }; hold high-resolution sampling.`
             : sim.state === 'PRE_DISTURBANCE'
               ? `Raise sampling on ${sim.node.node_id} and correlate with ${sim.node.downstream[0] ?? 'downstream'} over the next hour.`
               : `Watch ${sim.node.node_id}; no field action yet.`,
-        priority: SEVERITY_ORDER.indexOf(severity),
+        priority: SEVERITY_ORDER.indexOf(assessment.severity),
         rationale:
           'Deviation is persistent and one-sided, which is consistent with a developing flow-path change rather than a transient.',
       },

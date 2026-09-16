@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useApi, useQuery } from '../services/ApiProvider';
+import { PageErrorBoundary } from './PageErrorBoundary';
 import { STATE_CLASS, STATE_LABEL, clockTime } from '../components/ui';
 
 /**
@@ -70,7 +71,9 @@ export function AppShell() {
   if (isBare) {
     return (
       <div className="shell-bare">
-        <Outlet />
+        <PageErrorBoundary key={location.pathname}>
+          <Outlet />
+        </PageErrorBoundary>
         <button
           type="button"
           className="bare-back"
@@ -134,7 +137,11 @@ export function AppShell() {
       </header>
 
       <main className="shell-main">
-        <Outlet />
+        {/* Keyed on the route, so a page that throws is not a trap: navigating
+            away remounts the boundary and clears the error. */}
+        <PageErrorBoundary key={location.pathname}>
+          <Outlet />
+        </PageErrorBoundary>
       </main>
     </div>
   );

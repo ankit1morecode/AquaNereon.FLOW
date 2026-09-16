@@ -8,7 +8,7 @@ hydraulic visualization embedded where it belongs, on the node it describes.
 ```bash
 npm install
 npm run dev        # http://localhost:5178
-npm test           # 174 tests over the physics, measurement chain and services
+npm test           # 228 tests: physics, measurement chain, services, components
 npm run probe      # headless walk-through of the three flow scenarios
 npm run build
 ```
@@ -64,9 +64,17 @@ scenario dataset → junction condition → velocity field → sensor ring
 physical-to-AI chain rather than being "a generic dashboard full of decorative
 rectangles" (§28). So it reads top to bottom as that chain — the water, then
 what the ring saw, then how far that is from baseline, then what the state
-machine made of it, then the raw traces, then neighbours and control. The 3D
-viewport and the circumferential plot beside it are the same computation twice,
-not an illustration next to a number.
+machine made of it, then **why the software believes it**, then the raw traces,
+then neighbours and control. The 3D viewport and the circumferential plot beside
+it are the same computation twice, not an illustration next to a number.
+
+The "why this state" panel is shown for every node, not only ones that have
+raised an event. A node reading STABLE is also an assessment, and being able to
+see the evidence behind "nothing is wrong" is what makes the badge trustworthy
+the rest of the time. It is computed by the same function the event engine uses
+(`services/assessment.ts`), so the panel cannot disagree with the event it would
+produce — two implementations would drift, and the screen would end up
+explaining a conclusion the engine never reached.
 
 **Events** never shows a conclusion without its basis. Each event carries the
 nine things §16 requires — what changed, where, when, how far from baseline,
@@ -90,6 +98,7 @@ The seven from §27, plus the primitives they share.
 | `ForecastChart` | Prediction interval drawn, not optional, plus the backtest error. A bare forecast line invites being read as fact |
 | `EventTimeline` | Severity first, recency second: the worst thing happening now, not the newest |
 | `EvidencePanel` | The nine questions, answered from the event's own evidence |
+| `AssessmentPanel` | The same, for a node's *live* state — including one reading STABLE |
 | `JunctionPreview` | Bridges a node's telemetry into the 3D module's data seam. Lazily loaded |
 
 **Charts are hand-drawn SVG.** The dossier proposes Plotly or ECharts; both are
@@ -125,6 +134,25 @@ component tree at that rate, and it stops the map flickering as data arrives.
 > **The layout is illustrative.** It is a plausible distribution network drawn
 > over real ground, not a survey of anyone's actual water infrastructure. The
 > map says so on its face, and it should keep saying so.
+
+### Tracing an event
+
+Selecting an event on the Events screen draws two things the dossier asks for
+and that text alone cannot convey:
+
+- **The propagation path** (§12.1) — the chain of disturbed feeders the event
+  came down, in amber, with the furthest one marked as the origin. Where two
+  feeders are both disturbed the more anomalous is followed, because that is
+  the likelier origin and a branching highlight would be unreadable. An event
+  that says `PROPAGATED` without showing the path is asking to be taken on
+  trust.
+- **The candidate leak region** (§18) — the run *downstream* of the node, in
+  red. A ring reports what passes it, not what leaks after it, so a one-sided
+  pattern implicates the stretch between the node and whatever it feeds. That
+  is a region, not a point, and saying so is more honest than dropping a pin.
+
+Both are pure functions in `services/propagation.ts`, so they are tested
+directly rather than only through a rendered map.
 
 ### Basemap
 
@@ -269,8 +297,16 @@ quadrature in the tests.
 
 ## Tests
 
-`npm test` — 174 tests, no DOM and no WebGL, because the whole measurement
-chain and the whole service layer are pure TypeScript.
+`npm test` — 228 tests. The physics and service suites run in Node with no DOM
+and no WebGL, because that layer is pure TypeScript; the component suite opts
+into jsdom with a `@vitest-environment` docblock so the fast majority stays
+fast.
+
+The component tests are deliberately targeted rather than snapshot coverage.
+Each exists because of a specific way this interface can mislead or break: a
+badge that resizes when the state changes, a chart that throws on a flat
+series, a canvas component in an environment with no 2D context, a boundary
+that does not catch. Snapshots would pass through every one of those.
 
 | File | Covers |
 | --- | --- |
@@ -281,6 +317,8 @@ chain and the whole service layer are pure TypeScript.
 | `dataSources.test.ts` | Stale feeds, malformed frames, socket reconnect, recording round trip |
 | `simulation.test.ts` | Tracer containment, engine seek, history and temporal features |
 | `services.test.ts` | MQTT topics and QoS, device bus retain semantics, demand scale, event evidence completeness, client interchangeability, command acknowledgement |
+| `assessment.test.ts` | Evidence completeness and weight clamping, leak-suspicion conditions, propagation paths (including cycles and branching), suspect regions, geo helpers |
+| `components.test.tsx` | Badge width independence, reserved layout slots, charts on degenerate data, canvas components without a 2D context, event ordering, the page error boundary |
 
 Several caught real bugs while being written — the axial velocity on the core
 never actually reversed, freshly spawned tracers reported no velocity, and the
@@ -312,6 +350,13 @@ live contexts — the module detects it before mounting, catches anything that
 throws after, and recovers from a lost context by remounting with a bounded
 number of retries before explaining what happened. The failure mode is never a
 blank white rectangle.
+
+**If a page throws** — a null where a number was expected, a shape the frontend
+has not been taught yet — the failure is contained to that page. The navigation
+stays usable, the message says what went wrong, and the boundary is keyed on
+the route so navigating away clears it. For an operations tool a white screen
+is the worst outcome available: indistinguishable from the platform being down,
+at exactly the moment someone needs to know whether it is.
 
 ---
 

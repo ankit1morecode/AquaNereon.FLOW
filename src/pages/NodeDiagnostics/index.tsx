@@ -4,6 +4,7 @@ import { useApi, useQuery } from '../../services/ApiProvider';
 import { CircumferentialProfile } from '../../components/CircumferentialProfile';
 import { FlowSignatureChart } from '../../components/FlowSignatureChart';
 import { EventTimeline } from '../../components/EventTimeline';
+import { AssessmentPanel } from '../../components/AssessmentPanel';
 import { JunctionPreview } from '../../components/JunctionPreview';
 import { TimeSeriesChart } from '../../components/charts';
 import {
@@ -60,6 +61,20 @@ export function NodeDiagnostics() {
     () => nodes.data?.find((n) => n.node_id === nodeId),
     [nodes.data, nodeId],
   );
+
+  // Neighbour states, so the live assessment can weigh whether anything
+  // upstream explains what this node is seeing.
+  const neighbours = useMemo(() => {
+    const lookup = (ids: string[]) =>
+      ids
+        .map((id) => nodes.data?.find((n) => n.node_id === id))
+        .filter((n): n is NonNullable<typeof n> => Boolean(n))
+        .map((n) => ({ node_id: n.node_id, state: n.state }));
+    return {
+      upstream: lookup(node?.upstream ?? []),
+      downstream: lookup(node?.downstream ?? []),
+    };
+  }, [node, nodes.data]);
 
   const issue = useCallback(
     async (label: string, run: () => Promise<CommandAck>) => {
@@ -235,7 +250,18 @@ export function NodeDiagnostics() {
         </Panel>
       </div>
 
-      {/* --- 3. raw traces --- */}
+      {/* --- 3. why the software believes it --- */}
+      <div className="nd-row nd-assessment">
+        <AssessmentPanel
+          signature={sig}
+          state={node.state}
+          upstream={neighbours.upstream}
+          downstream={neighbours.downstream}
+          nodeId={node.node_id}
+        />
+      </div>
+
+      {/* --- 4. raw traces --- */}
       <div className="nd-row nd-traces">
         <Panel title="Flow and pressure" subtitle="Both branches and the outlet">
           {frames.length > 1 ? (
@@ -346,7 +372,7 @@ export function NodeDiagnostics() {
         </Panel>
       </div>
 
-      {/* --- 4. context and control --- */}
+      {/* --- 5. context and control --- */}
       <div className="nd-row nd-control">
         <Panel title="Neighbouring nodes" subtitle="Upstream and downstream behaviour">
           <div className="nd-neighbours">

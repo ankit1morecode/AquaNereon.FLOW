@@ -3,6 +3,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { FlowState, NetworkGraph, NodeId, NodeSummary, WaterEvent } from '../../types';
 import { MAP_VIEW, zoneHull } from '../../services/topology';
+import { propagationPath, suspectRegion } from '../../services/propagation';
 import { STATE_LABEL } from '../ui';
 
 /**
@@ -106,6 +107,14 @@ export interface NetworkMapProps {
    * sized by the grid — a map is a better use of spare height than a gap.
    */
   height?: number | string;
+  /**
+   * Trace one event on the map: the chain of disturbed feeders it came down,
+   * and the stretch of pipe a suspected loss would be in. An event that says
+   * "PROPAGATED" without showing the path is asking to be taken on trust.
+   */
+  focusEvent?: WaterEvent | null;
+  /** Centre on the focused event rather than fitting the whole zone. */
+  followEvent?: boolean;
 }
 
 interface NodeLayers {
@@ -122,6 +131,8 @@ export function NetworkMap({
   onSelect,
   focusZone = null,
   height = 420,
+  focusEvent = null,
+  followEvent = false,
 }: NetworkMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -130,6 +141,7 @@ export function NetworkMap({
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   /** The view we want when nobody has panned or zoomed away from it. */
+  const highlightRef = useRef<L.Layer[]>([]);
   const fitBoundsRef = useRef<L.LatLngBounds | null>(null);
   const userMovedRef = useRef(false);
   const programmaticRef = useRef(false);
@@ -403,13 +415,94 @@ export function NetworkMap({
     }
   }, [byId, openByNode, selected, focusZone, network]);
 
+  /* ---- trace the focused event: propagation path and suspect region ---- */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    for (const layer of highlightRef.current) layer.remove();
+    highlightRef.current = [];
+    if (!focusEvent) return;
+
+    const vertexById = new Map(network.vertices.map((v) => [v.id, v]));
+    const added: L.Layer[] = [];
+
+    // --- the run a suspected loss would be in ---
+    // Drawn first so the propagation path sits on top of it where they meet.
+    if (focusEvent.suspected_origin) {
+      const region = suspectRegion(network, focusEvent.node_id);
+      for (const pipeId of region.pipes) {
+        const edge = network.edges.find((e) => e.pipe_id === pipeId);
+        const from = edge && vertexById.get(edge.from);
+        const to = edge && vertexById.get(edge.to);
+        if (!from || !to) continue;
+        const band = L.polyline(
+          [
+            [from.location.lat, from.location.lng],
+            [to.location.lat, to.location.lng],
+          ],
+          { className: 'nm-suspect', weight: 11, interactive: false },
+        ).addTo(map);
+        added.push(band);
+      }
+    }
+
+    // --- the chain of disturbed feeders it came down ---
+    const trace = propagationPath(network, nodes, focusEvent.node_id);
+    for (const pipeId of trace.pipes) {
+      const edge = network.edges.find((e) => e.pipe_id === pipeId);
+      const from = edge && vertexById.get(edge.from);
+      const to = edge && vertexById.get(edge.to);
+      if (!from || !to) continue;
+      const line = L.polyline(
+        [
+          [from.location.lat, from.location.lng],
+          [to.location.lat, to.location.lng],
+        ],
+        { className: 'nm-propagation', weight: 4, interactive: false },
+      ).addTo(map);
+      added.push(line);
+    }
+
+    // --- the origin of the chain, where there is one ---
+    if (!trace.local) {
+      const origin = vertexById.get(trace.path[0]);
+      if (origin) {
+        const marker = L.circleMarker([origin.location.lat, origin.location.lng], {
+          radius: 15,
+          className: 'nm-origin',
+          interactive: false,
+        }).addTo(map);
+        marker.bindTooltip('origin', {
+          permanent: true,
+          direction: 'bottom',
+          offset: [0, 10],
+          className: 'nm-origin-label',
+        });
+        added.push(marker);
+      }
+    }
+
+    highlightRef.current = added;
+    return () => {
+      for (const layer of added) layer.remove();
+    };
+  }, [focusEvent, network, nodes]);
+
   /* ---- fit the view to the zone in focus ---- */
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    const members = network.vertices.filter(
-      (v) => focusZone === null || v.zone_id === focusZone,
+    // Following an event means framing the whole path it came down, not just
+    // the node it surfaced at — the origin is the part worth seeing.
+    const ids =
+      followEvent && focusEvent
+        ? new Set(propagationPath(network, nodes, focusEvent.node_id).path)
+        : null;
+
+    const members = network.vertices.filter((v) =>
+      ids ? ids.has(v.id) : focusZone === null || v.zone_id === focusZone,
     );
     if (members.length === 0) return;
 
@@ -423,11 +516,11 @@ export function NetworkMap({
     programmaticRef.current = true;
     map.fitBounds(bounds, {
       padding: [48, 48],
-      maxZoom: focusZone ? 14 : 13,
+      maxZoom: ids ? 14 : focusZone ? 14 : 13,
       animate: false,
     });
     programmaticRef.current = false;
-  }, [focusZone, network]);
+  }, [focusZone, network, followEvent, focusEvent, nodes]);
 
   /* ---- Leaflet needs telling when its container resizes ---- */
   useEffect(() => {

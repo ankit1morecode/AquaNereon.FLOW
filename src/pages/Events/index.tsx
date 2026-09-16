@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApi, useQuery, usePlatform } from '../../services/ApiProvider';
 import { EventTimeline } from '../../components/EventTimeline';
 import { EvidencePanel } from '../../components/EvidencePanel';
+import { NetworkMap } from '../../components/NetworkMap';
 import { Empty, ErrorNote, Loading, Panel } from '../../components/ui';
 import type { Severity, WaterEvent } from '../../types';
 
@@ -26,6 +27,7 @@ const STATUSES: WaterEvent['status'][] = [
 
 export function Events() {
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const platform = usePlatform();
   const client = useApi();
 
@@ -34,6 +36,8 @@ export function Events() {
 
   const events = useQuery((c) => c.getEvents({ limit: 80 }), []);
   const recommendations = useQuery((c) => c.getRecommendations(), []);
+  const network = useQuery((c) => c.getNetwork(), []);
+  const nodes = useQuery((c) => c.getNodes(), []);
 
   const selectedId = params.get('event');
 
@@ -114,6 +118,29 @@ export function Events() {
       </div>
 
       <div className="ep-detail">
+        {selected && network.data && nodes.data && (
+          <Panel
+            title="Where"
+            subtitle={
+              selected.network_context.propagation === 'LOCAL'
+                ? 'Local to this node — nothing upstream explains it'
+                : 'Traced back through its disturbed feeders'
+            }
+            className="map-panel ep-map"
+          >
+            <NetworkMap
+              network={network.data}
+              nodes={nodes.data}
+              events={events.data.items}
+              selected={selected.node_id}
+              focusEvent={selected}
+              followEvent
+              onSelect={(id) => navigate(`/nodes/${id}`)}
+              height="100%"
+            />
+          </Panel>
+        )}
+
         {selected ? (
           <Panel title="Why this event exists" subtitle="Evidence chain, model outputs and context">
             <EvidencePanel
