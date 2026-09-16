@@ -1,0 +1,63 @@
+/**
+ * AquaNereon.FLOW design tokens.
+ *
+ * One dark instrument palette across the platform. The 3D view already had to
+ * be dark — water read as illuminated tracers needs a black ground — so the
+ * rest of the application matches it rather than making the operator's eyes
+ * re-adapt every time they open a node.
+ *
+ * The four state colours are the backbone: they mean exactly one thing
+ * (STABLE / DRIFT / PRE-DISTURBANCE / DISTURBANCE) and are never used
+ * decoratively anywhere else.
+ */
+
+:root {
+  /* -- ground -- */
+  --bg: #05090e;
+  --bg-raised: #08111a;
+  --panel: rgba(9, 18, 26, 0.78);
+  --panel-solid: #0a141d;
+  --panel-edge: rgba(94, 148, 176, 0.22);
+  --panel-edge-strong: rgba(120, 190, 220, 0.42);
+
+  /* -- ink -- */
+  --ink: #d6e9f5;
+  --ink-dim: #7e96a8;
+  --ink-faint: #56697a;
+
+  /* -- identity -- */
+  --a: #2fd8ff;
+  --b: #ff9a4d;
+
+  /* -- state, in escalation order -- */
+  --state-stable: #4fe0a0;
+  --state-drift: #ffd166;
+  --state-pre: #ff9a4d;
+  --state-disturbance: #ff5f7a;
+
+  /* aliases kept for the 3D module's existing rules */
+  --warn: var(--state-drift);
+  --hot: var(--state-disturbance);
+  --ok: var(--state-stable);
+
+  /* -- type -- */
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono', Menlo, monospace;
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* -- geometry -- */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --gap: 14px;
+  --rail: 214px;
+
+  color-scheme: dark;
+}
+
+/* The severity ramp reuses the state colours, because an event's severity is
+   downstream of the state that produced it and should not look unrelated. */
+.sev-info { color: var(--ink-dim); }
+.sev-low { color: var(--state-drift); }
+.sev-medium { color: var(--state-pre); }
+.sev-high { color: var(--state-disturbance); }
+.sev-critical { color: #ff3355; }

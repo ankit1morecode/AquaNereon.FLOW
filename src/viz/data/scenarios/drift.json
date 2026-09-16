@@ -1,0 +1,15 @@
+{
+  "id": "DRIFT",
+  "label": "Flow drift",
+  "caption": "Branch B falls away slowly. Nothing alarms, but the vortex core walks off axis and the ring develops a one-sided pattern.",
+  "loopSec": 36,
+  "keyframes": [
+    { "t": 0,  "a": 11.9, "b": 12.0, "pA": 312, "pB": 310, "restriction": 0.0,  "noise": 0.14 },
+    { "t": 6,  "a": 12.0, "b": 11.4, "pA": 313, "pB": 305, "restriction": 0.0,  "noise": 0.15 },
+    { "t": 12, "a": 12.2, "b": 10.6, "pA": 315, "pB": 297, "restriction": 0.02, "noise": 0.16 },
+    { "t": 18, "a": 12.4, "b": 9.7,  "pA": 317, "pB": 288, "restriction": 0.04, "noise": 0.18 },
+    { "t": 24, "a": 12.6, "b": 9.1,  "pA": 319, "pB": 281, "restriction": 0.05, "noise": 0.19 },
+    { "t": 30, "a": 12.5, "b": 9.4,  "pA": 318, "pB": 284, "restriction": 0.04, "noise": 0.18 },
+    { "t": 36, "a": 11.9, "b": 12.0, "pA": 312, "pB": 310, "restriction": 0.0,  "noise": 0.14 }
+  ]
+}

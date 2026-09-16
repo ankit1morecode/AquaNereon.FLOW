@@ -1,0 +1,17 @@
+{
+  "id": "DISTURBANCE",
+  "label": "Disturbance",
+  "caption": "Branch A surges and pulses while B collapses, against a partly restricted outlet. The core breaks down, precesses hard, and the ring pattern loses its shape entirely.",
+  "loopSec": 30,
+  "keyframes": [
+    { "t": 0,  "a": 12.0, "b": 11.9, "pA": 312, "pB": 311, "restriction": 0.02, "noise": 0.15 },
+    { "t": 4,  "a": 14.8, "b": 10.4, "pA": 341, "pB": 296, "restriction": 0.12, "noise": 0.28 },
+    { "t": 8,  "a": 18.6, "b": 7.2,  "pA": 379, "pB": 262, "restriction": 0.30, "noise": 0.46 },
+    { "t": 12, "a": 20.4, "b": 5.1,  "pA": 398, "pB": 238, "restriction": 0.42, "noise": 0.58 },
+    { "t": 16, "a": 19.1, "b": 4.6,  "pA": 385, "pB": 231, "restriction": 0.46, "noise": 0.62 },
+    { "t": 20, "a": 20.9, "b": 5.6,  "pA": 403, "pB": 244, "restriction": 0.40, "noise": 0.57 },
+    { "t": 24, "a": 17.2, "b": 8.3,  "pA": 364, "pB": 274, "restriction": 0.24, "noise": 0.40 },
+    { "t": 30, "a": 12.0, "b": 11.9, "pA": 312, "pB": 311, "restriction": 0.02, "noise": 0.15 }
+  ],
+  "pulse": { "branch": "A", "amplitudePct": 0.14, "hz": 0.9 }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "NORMAL",
+  "label": "Normal",
+  "caption": "Balanced branches. The chamber swirl is steady and centred, and the ring reads the same all the way round.",
+  "loopSec": 24,
+  "keyframes": [
+    { "t": 0,  "a": 11.8, "b": 12.0, "pA": 312, "pB": 309, "restriction": 0.0,  "noise": 0.12 },
+    { "t": 6,  "a": 12.1, "b": 11.9, "pA": 314, "pB": 311, "restriction": 0.0,  "noise": 0.12 },
+    { "t": 12, "a": 11.9, "b": 12.1, "pA": 311, "pB": 313, "restriction": 0.0,  "noise": 0.12 },
+    { "t": 18, "a": 12.0, "b": 11.8, "pA": 313, "pB": 310, "restriction": 0.0,  "noise": 0.12 },
+    { "t": 24, "a": 11.8, "b": 12.0, "pA": 312, "pB": 309, "restriction": 0.0,  "noise": 0.12 }
+  ]
+}
